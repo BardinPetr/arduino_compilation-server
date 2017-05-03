@@ -25,6 +25,7 @@ function randomInt(low, high) {
 }
 
 function start() {
+    log("Started.");
     http.createServer(function(request, response) {
         response.setHeader('Access-Control-Allow-Origin', '*');
         response.setHeader('Access-Control-Allow-Methods', 'GET, POST');
@@ -33,21 +34,28 @@ function start() {
         var board, sketch;
         var ok = true;
 
+        log("New request. Method: " + request.method);
+
         if (request.method == 'POST') {
-            var body = [];
-            request.on('data', function(chunk) {
-                body.push(chunk);
-            }).on('end', function() {
-                try {
-                    body = JSON.parse(Buffer.concat(body).toString());
-                    board = body.board;
-                    sketch = body.sketch;
-                } catch (Exception) {
-                    response.writeHead(400);
-                    response.end();
-                    ok = false;
-                }
-            });
+            try {
+                var body = [];
+                request.on('data', function(chunk) {
+                    body.push(chunk);
+                }).on('end', function() {
+                    try {
+                        body = JSON.parse(Buffer.concat(body).toString());
+                        board = body.board;
+                        sketch = body.sketch;
+                    } catch (Exception) {
+                        response.writeHead(400);
+                        response.end();
+                        ok = false;
+                    }
+                });
+                log("Data parsed successfully");
+            } catch (Exception) {
+                log("Exception while working with data from POST")
+            }
         } else {
             var data = request.url
             if (data == '/favicon.ico') {
@@ -60,13 +68,17 @@ function start() {
                     board = json.board;
                     sketch = json.sketch;
                     sketch = sketch.replace(/%0A/g, '\n');
+                    log("Data parsed successfully");
                 } catch (Exception) {
                     response.writeHead(400);
                     response.end();
                     ok = false;
+                    log("Exception while working with data from GET")
                 }
             }
         }
+
+        log("Board: " + board);
 
         if (ok) {
             arduinopath = arduinopathC;
@@ -79,27 +91,57 @@ function start() {
             shell.exec("mkdir " + rnd, { silent: true });
             shell.exec("mkdir " + rnd_o, { silent: true });
 
-            fileSystem.writeFile(s_Path, sketch, function(err) {
-                if (err) {
-                    response.writeHead(500);
-                    response.end();
-                    return console.log(err);
-                }
+            try {
+                fileSystem.writeFile(s_Path, sketch, function(err) {
+                    if (err) {
+                        response.writeHead(500);
+                        response.end();
+                        shell.rm('-rf', rnd);
+                        shell.rm('-rf', rnd_o);
+                        return console.log(err);
+                    }
 
-                arduinopath += (" --board " + board) + (" --pref build.path=" + rnd_o) + (" --verify " + s_Path);
-                shell.exec(arduinopath, function(code, stdout, stderr) {
-                    if (code == 0) {
-                        var filePath = path.join(__dirname, h_Path);
+                    arduinopath += (" --board " + board) + (" --pref build.path=" + rnd_o) + (" --verify " + s_Path);
+                    shell.exec(arduinopath, function(code, stdout, stderr) {
+                        if (code == 0) {
+                            log("Running arduino");
 
-                        fileSystem.readFile(h_Path, 'utf8', function(err, data) {
-                            if (err) {
-                                response.writeHead(500);
+                            var filePath = path.join(__dirname, h_Path);
+
+                            fileSystem.readFile(h_Path, 'utf8', function(err, data) {
+                                if (err) {
+                                    response.writeHead(500);
+                                    response.end();
+                                    shell.rm('-rf', rnd);
+                                    shell.rm('-rf', rnd_o);
+                                    return log(err);
+                                }
+
+                                var output = { "code": code, "hex": data, "stderr": null, "stdout": stdout }
+                                var _output = JSON.stringify(output);
+
+                                log("Arduino ok.\nFinished");
+
+                                response.writeHead(200, {
+                                    'Content-Type': 'application/json',
+                                    'Content-Length': _output.length
+                                });
+                                response.write(_output);
                                 response.end();
-                                return log(err);
-                            }
 
-                            var output = { "code": code, "hex": data, "stderr": null, "stdout": stdout }
+                                shell.rm('-rf', rnd);
+                                shell.rm('-rf', rnd_o);
+                            });
+                        } else {
+                            stderr = stderr.replace(/Loading configuration.../g, '');
+                            stderr = stderr.replace(/\r\nInitializing packages.../g, '');
+                            stderr = stderr.replace(/\r\nPreparing boards.../g, '');
+                            stderr = stderr.replace(/\r\nVerifying...\r\n/g, '');
+
+                            var output = { "code": code, "hex": null, "stderr": stderr, "stdout": stdout }
                             var _output = JSON.stringify(output);
+
+                            log("Arduino error");
 
                             response.writeHead(200, {
                                 'Content-Type': 'application/json',
@@ -110,28 +152,16 @@ function start() {
 
                             shell.rm('-rf', rnd);
                             shell.rm('-rf', rnd_o);
-                        });
-                    } else {
-                        stderr = stderr.replace(/Loading configuration.../g, '');
-                        stderr = stderr.replace(/\r\nInitializing packages.../g, '');
-                        stderr = stderr.replace(/\r\nPreparing boards.../g, '');
-                        stderr = stderr.replace(/\r\nVerifying...\r\n/g, '');
-
-                        var output = { "code": code, "hex": null, "stderr": stderr, "stdout": stdout }
-                        var _output = JSON.stringify(output);
-
-                        response.writeHead(200, {
-                            'Content-Type': 'application/json',
-                            'Content-Length': _output.length
-                        });
-                        response.write(_output);
-                        response.end();
-
-                        shell.rm('-rf', rnd);
-                        shell.rm('-rf', rnd_o);
-                    }
+                        }
+                    });
                 });
-            });
+            } catch (Exception) {
+                log("ERROR");
+                shell.rm('-rf', rnd);
+                shell.rm('-rf', rnd_o);
+            }
+        } else {
+            log("ERROR");
         }
     }).listen(port);
 }
